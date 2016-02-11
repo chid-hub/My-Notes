@@ -1,0 +1,49 @@
+//JAVA
+
+public static void main(String args[]) {
+	
+	  try {     
+		  
+		  Gson gson = new Gson(); 
+
+		  PDDocument pdDoc = PDDocument.load(new File("src/Meslie_G0897001-2_2015Certificate.pdf"));
+		 
+	    	List allPage = pdDoc.getDocumentCatalog().getAllPages();
+	    	List<Map<String, Object>> pageAry=new ArrayList<Map<String,Object>>();
+	        for(int j=0;j<allPage.size();j++){
+	        	PDPage page = (PDPage) allPage.get(j);
+	        	
+	        	Map<String, Object> certificate = new HashMap<String, Object>();
+				
+				Rectangle2D name = new Rectangle2D.Double(178, 321.75, 320, 14.68);
+				Rectangle2D organizer = new Rectangle2D.Double(200.78, 385.88, 600, 15);
+				Rectangle2D date = new Rectangle2D.Double(200, 445.5, 506, 32);
+				
+				PDFTextStripperByArea stripper = new PDFTextStripperByArea();
+				
+				stripper.addRegion("name", name);
+				stripper.addRegion("organizer", organizer);
+				stripper.addRegion("date", date);
+
+				stripper.extractRegions(page);
+				
+				String nameTxt=stripper.getTextForRegion("name").replace("\n", "").trim();
+				String organizerTxt=stripper.getTextForRegion("organizer").replace("\n", "").trim();
+				String dateTxt=stripper.getTextForRegion("date").replace("\n", " ").trim();
+				System.out.println("name"+nameTxt);
+				System.out.println("organizerTxt "+organizerTxt);
+				System.out.println("dateTxt "+dateTxt);
+				
+				certificate.put("name", nameTxt);
+				certificate.put("organizer", organizerTxt);
+				certificate.put("date", dateTxt);
+				pageAry.add(certificate);
+	        }
+	     
+	        System.out.println("json "+gson.toJson(pageAry));
+	        
+	  }catch (Exception e) {
+	    System.out.println(e);
+	  }
+	}
+	
