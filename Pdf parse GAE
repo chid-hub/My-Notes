@@ -1,0 +1,608 @@
+public class MailHandlerServlet extends HttpServlet {
+
+	private static final long serialVersionUID = 1L;
+	private static final Logger log = Logger.getLogger(MailHandlerServlet.class.getName());
+	Properties props;
+	Session session ;
+	String  mailAdr,mailName;
+	InternetAddress[] to;
+	
+	static Boolean eachLineSuccess;
+	static Boolean overAllSuccess;
+	static Boolean noAttachment;
+	static String errorMsg,fileName,msgBody,sub,EmpName,rev,periodEnd;
+	
+	
+	@Override
+	public void doPost(HttpServletRequest req, HttpServletResponse resp)
+			throws IOException {
+		  eachLineSuccess=overAllSuccess=true;noAttachment=false;errorMsg=fileName=sub=mailName=msgBody = "";
+//		  deleteFolderChild();
+//		  createFolder();
+		try {
+			 props = new Properties();
+			 session = Session.getDefaultInstance(props, null);
+			 MimeMessage message = new MimeMessage(session, req.getInputStream());
+			 
+			 Address[] froms = message.getFrom();
+			 mailAdr = froms == null ? null : ((InternetAddress) froms[0]).getAddress();
+		
+			 mailAdr =InternetAddress.toString(message.getFrom());
+//			 String name  = mailAdr.split("<")[0];
+//			 String email=(mailAdr.split(">")[0]).split("<")[1];
+//			 mailAdr=email;mailName=name;
+			// Extract out the important fields from the Mime Message
+			String subject = message.getSubject();
+			
+			log.info("Got an email. mailAdr = " + mailAdr);
+			log.info("Got an email. Subject = " + subject);
+
+			String contentType = message.getContentType();
+			log.info("Email Content Type : " + contentType);
+
+			Multipart multipart = (Multipart) message.getContent();
+			for (int i = 0; i < multipart.getCount(); i++) {
+				BodyPart bodyPart = multipart.getBodyPart(i);
+				String disposition = bodyPart.getDisposition();
+
+				if (disposition != null && (disposition.equalsIgnoreCase("ATTACHMENT"))) {
+					eachLineSuccess=true;
+					noAttachment=true;
+					fileName=bodyPart.getFileName();
+					msgBody=msgBody+"\n "+fileName+" - ";
+					InputStream is = bodyPart.getInputStream();
+					
+					ByteArrayOutputStream buffer = new ByteArrayOutputStream();
+					int nRead;
+					byte[] data = new byte[16384];
+
+					while ((nRead = is.read(data, 0, data.length)) != -1) {
+						buffer.write(data, 0, nRead);
+					}
+					buffer.flush();
+//					String str = new String(data, "UTF-8");
+//					log.info("toByteArray" + str);
+					String json=parsePdf(buffer.toByteArray());
+					
+					String fName = "";
+					if(eachLineSuccess && pasJsonPdfValues(json)){
+						  fName=EmpName+"_"+endDateWithFormat(periodEnd)+"_"+rev+".pdf";
+						  //uploadFile(new ByteArrayInputStream(buffer.toByteArray()),fName,null);
+					}else {
+						 fName=mailAdr+"_"+curDateWithFormat()+"_"+fileName;
+						 //uploadFile(new ByteArrayInputStream(buffer.toByteArray()),fName,Constants.errorFolderID);
+						 overAllSuccess=false;
+					}
+				}
+
+			}
+			
+			if(!overAllSuccess){
+			   sendMail();
+			}else if(!noAttachment){
+				sub=Constants.subAttMiss;
+				msgBody=Constants.msgAttMiss;
+				sendMail();
+			}
+			log.info("eachLineSuccess :"+ msgBody+"Subject :"+sub+"Email : "+mailAdr);
+			//printParts(message);
+			// Parse out the Multiparts
+			// Perform business logic based on the email
+		} catch (Exception ex) {
+			log.log(Level.WARNING,
+					"Failure in receiving email : " + ex.getMessage());
+		}
+	}
+
+	private static Boolean pasJsonPdfValues(String json) {
+
+		System.out.println("json :" + json);
+		Boolean retu=true;
+		try {
+			URL url1 = new URL(Constants.url);
+			HttpURLConnection connection = (HttpURLConnection) url1.openConnection();
+			connection.setDoOutput(true);
+			connection.setDoInput(true);
+			connection.setRequestMethod("POST");
+
+			OutputStreamWriter writer = new OutputStreamWriter(connection.getOutputStream());
+			writer.write("pdfjson=" + json);
+			writer.close();
+
+			if (connection.getResponseCode() == HttpURLConnection.HTTP_OK) {
+				
+			    BufferedReader reader = new BufferedReader(new InputStreamReader(connection.getInputStream()));
+	            String line,str="";
+	            
+	            StringBuilder sb = new StringBuilder();
+	            while ((line = reader.readLine()) != null) {
+	            	sb.append(line);	
+	            }
+	            System.out.println("Server Response:" + sb.toString());
+	            
+	            JsonElement jelement = new JsonParser().parse(sb.toString());
+	            JsonObject  jobject = jelement.getAsJsonObject();
+	            jobject = jobject.getAsJsonObject("message");
+	            String status = jobject.get("status").getAsString();
+	            String sbjt = jobject.get("sub").getAsString();
+	            //String msg = jobject.get("msg").getAsString();
+	            
+	            JsonArray jarray = jobject.getAsJsonArray("msg");
+	            
+	            StringBuilder stringbuild = new StringBuilder();
+	            
+	            for(int l=0;l<jarray.size();l++){
+	            	
+	            	stringbuild.append(jarray.get(l).getAsString()+"\n");
+	            	
+	            }
+	            
+//	            msg = msg.replaceAll("[\\[\\]\\\\]","");
+//	            msg = msg.replace("\"", "");
+	            
+	            if("failure".equalsIgnoreCase(status)){
+	            	sub=sbjt;
+	            	msgBody=msgBody+""+stringbuild.toString();
+	            	retu=overAllSuccess=false; 
+	            }else {
+	            	msgBody=msgBody+""+stringbuild.toString();
+				}
+
+	            reader.close();
+				System.out.println("connection.getResponseCode():" + 200);
+				connection.disconnect();
+				return retu;
+			} else {
+				// Server returned HTTP error code.
+			}
+		} catch (MalformedURLException e) {
+			log.log(Level.WARNING, "MalformedURLException : " + e.getMessage());
+			// ...
+		} catch (IOException e) {
+			// ...
+		}
+		return retu;
+	}
+	private static Drive getDriveService() {
+		   HttpTransport httpTransport = new NetHttpTransport();
+		     JsonFactory jsonFactory = new JacksonFactory();
+		     AppIdentityCredential credential = new AppIdentityCredential.Builder(Arrays.asList(DriveScopes.DRIVE)).build();
+		     // API_KEY is from the Google Console as a server API key
+
+		     GoogleClientRequestInitializer keyInitializer = new CommonGoogleClientRequestInitializer(Constants.apiKey);
+		     Drive service = new Drive.Builder(httpTransport, jsonFactory, null)
+		     	 .setApplicationName(Constants.appName)
+		         .setHttpRequestInitializer(credential)
+		         .setGoogleClientRequestInitializer(keyInitializer)
+		         .build();
+	 return service;   
+	}
+	private static void uploadFile(InputStream is,String filename ,String parentID) {
+
+		    com.google.api.services.drive.model.File fileMetadata = new com.google.api.services.drive.model.File();
+		    fileMetadata.setTitle(filename);
+		    fileMetadata.setMimeType("application/pdf");
+		    if(parentID!=null)
+		     fileMetadata.setParents( Arrays.asList(new ParentReference().setId(parentID)));
+
+		     Drive service = getDriveService();
+		     
+		     try {
+				Drive.Files.Insert in= service.files().insert(fileMetadata, new InputStreamContent("application/pdf",is));
+				
+				com.google.api.services.drive.model.File retFile =in.execute();
+
+				if(retFile!=null){
+					
+					Permission newPermission = new Permission();
+					newPermission.setValue( Constants.email);
+					newPermission.setType("user");
+					newPermission.setRole("reader");
+					service.permissions().insert(retFile.getId(), newPermission).execute();
+					
+					System.out.println("Drive retFile:"+retFile.getId());	
+				}
+			} catch (IOException e) {
+				System.out.println("Drive Error:"+e.toString());
+			}
+		  }
+	
+	private static void deleteFolderChild(){
+		Drive service = getDriveService();
+		try {
+			Children.List request = service.children().list("root");
+			ChildList children = request.execute();
+
+	        for (ChildReference child : children.getItems()) {
+	        	
+	          service.files().delete(child.getId()).execute();
+	          System.out.println("File Id: " + child.getId());
+	        }
+		} catch (IOException e) {
+			e.printStackTrace();
+		}
+	}
+	private static void createFolder() {
+			try{
+				Drive service = getDriveService();
+				com.google.api.services.drive.model.File body = new com.google.api.services.drive.model.File();
+			    body.setTitle("TimeSheet");
+			    //body.setParents(listParentReference);
+			    body.setMimeType("application/vnd.google-apps.folder");
+			    body.setOwners(Arrays.asList(new com.google.api.services.drive.model.User().setEmailAddress(Constants.email)));
+			    com.google.api.services.drive.model.File file = service.files().insert(body).execute(); 
+				if(file!=null){
+					
+					Permission newPermission = new Permission();
+					newPermission.setValue(Constants.email);
+					newPermission.setType("user");
+					newPermission.setRole("reader");
+					service.permissions().insert(file.getId(), newPermission).execute();
+					
+					System.out.println("Drive folder:"+file.getId());	
+				}
+	
+		}catch (IOException e) {
+				System.out.println("Drive Error:"+e.toString());
+		}
+	}
+		  /** Updates the name of the uploaded file to have a "drivetest-" prefix. */
+	private static void updateFileWithTestSuffix(String id) {
+		try{
+			com.google.api.services.drive.model.File fileMetadata = new com.google.api.services.drive.model.File();
+		    fileMetadata.setTitle("drivetest-" + "filename");
+		    Drive service = getDriveService();
+		    Drive.Files.Update update = service.files().update(Constants.errorFolderID, fileMetadata);
+		    update.execute();
+		}catch (IOException e) {
+			System.out.println("Drive Error:"+e.toString());
+		}  
+	}
+	private static String parsePdf(byte[] pdfBytes) {
+		String jdata=null;
+		try {
+			Gson gson = new Gson(); 
+			RandomAccessBuffer tempMemBuffer = new RandomAccessBuffer();
+			PDDocument pdDoc = PDDocument.load(new ByteArrayInputStream(pdfBytes), tempMemBuffer);
+
+			// PDDocument pdDoc = PDDocument.load(new // File("src/AmitTimesheet_073115.pdf"));
+			List page1 = pdDoc.getDocumentCatalog().getAllPages();
+		 	List<Map<String, Object>> pageAry=new ArrayList<Map<String,Object>>();
+	        for(int j=0;j<page1.size();j++){
+	        	
+	           PDPage page = (PDPage) page1.get(j);
+	           Map<String, Object> headFooter = ExractHeaderFooter(page);
+			
+			   if(eachLineSuccess){
+				  String employee_name=(String) headFooter.get("employee_name");
+//				System.out.println("employee_name :"+ employee_name);
+			
+				  List<Map<String, Object>> ary=new ArrayList<Map<String,Object>>();
+				
+				  for(int i=0;i<15;i++){
+					
+					Map<String, Object> table = new HashMap<String, Object>();
+					
+					Rectangle2D line_no = new Rectangle2D.Double(15, 136.63+(i*22), 8.896, 6);
+					Rectangle2D project = new Rectangle2D.Double(32, 127+(i*22), 178, 6);// xxxxx
+					Rectangle2D plc = new Rectangle2D.Double(32, 138+(i*22), 178, 6);
+					Rectangle2D pay_type = new Rectangle2D.Double(212, 127+(i*22), 130, 6);
+					Rectangle2D labor_location = new Rectangle2D.Double(212, 138+(i*22),150, 6);
+					Rectangle2D org = new Rectangle2D.Double(342, 127+(i*22), 80, 6);
+					Rectangle2D charge_description = new Rectangle2D.Double(427, 127+(i*22),100, 6);// xxxxx
+			
+					Rectangle2D day1 = new Rectangle2D.Double(537, 128+(i*22), 27, 6);//
+			        Rectangle2D day2 = new Rectangle2D.Double(566, 128+(i*22), 27, 6);//
+			        Rectangle2D day3 = new Rectangle2D.Double(594, 128+(i*22), 27, 6);
+			        Rectangle2D day4 = new Rectangle2D.Double(622, 128+(i*22), 27, 6);
+			        Rectangle2D day5 = new Rectangle2D.Double(650, 128+(i*22), 27, 6);
+			        Rectangle2D day6 = new Rectangle2D.Double(679, 128+(i*22), 27, 6);
+			        Rectangle2D day7 = new Rectangle2D.Double(707, 128+(i*22), 27, 6);//
+			        Rectangle2D linetot =  new Rectangle2D.Double(734, 128+(i*22), 27, 6);
+			
+					PDFTextStripperByAreaGAE stripper2 = new PDFTextStripperByAreaGAE();
+					PDFTextStripperByAreaGAE stripper = new PDFTextStripperByAreaGAE();
+				        
+					stripper2.addRegion("charge_description", charge_description);
+					stripper.addRegion("line_no", line_no);
+					stripper2.addRegion("project", project);
+					stripper.addRegion("plc", plc);
+					stripper.addRegion("pay_type", pay_type);
+					stripper.addRegion("labor_location", labor_location);
+					stripper.addRegion("org", org);
+					stripper.addRegion("day1", day1);
+					stripper.addRegion("day2", day2);
+					stripper.addRegion("day3", day3);
+					stripper.addRegion("day4", day4);
+					stripper.addRegion("day5", day5);
+					stripper.addRegion("day6", day6);
+					stripper.addRegion("day7", day7);
+					stripper.addRegion("linetot", linetot);
+	
+					stripper.extractRegions(page);
+					stripper2.extractRegions(page);
+					
+					String line_noTxt=stripper.getTextForRegion("line_no").replace("\n", "");
+					String projectTxt=stripper2.getTextForRegion("project").replace("\n", "");
+					String plcTxt=stripper.getTextForRegion("plc").replace("\n", "");
+					String pay_typeTxt=stripper.getTextForRegion("pay_type").replace("\n", "");
+					String labor_locationTxt=stripper.getTextForRegion("labor_location").replace("\n", "");
+					String orgTxt=stripper.getTextForRegion("org").replace("\n", "");
+					String charge_descriptionTxt=stripper2.getTextForRegion("charge_description").replace("\n", "");
+					
+					
+					String day1Txt=stripper.getTextForRegion("day1").replace("\n", "");
+					String day2Txt=stripper.getTextForRegion("day2").replace("\n", "");
+					String day3Txt=stripper.getTextForRegion("day3").replace("\n", "");
+					String day4Txt=stripper.getTextForRegion("day4").replace("\n", "");
+					String day5Txt=stripper.getTextForRegion("day5").replace("\n", "");
+					String day6Txt=stripper.getTextForRegion("day6").replace("\n", "");
+					String day7Txt=stripper.getTextForRegion("day7").replace("\n", "");
+					String linetotTxt=stripper.getTextForRegion("linetot").replace("\n", "");
+					
+					if(checkTotVal(day1Txt, day2Txt, day3Txt, day4Txt, day5Txt, day6Txt, day7Txt, linetotTxt)){
+						table.put("line_no",line_noTxt);
+						table.put("project", projectTxt);
+						table.put("plc", plcTxt);
+						table.put("pay_type", pay_typeTxt);
+						table.put("labor_location",labor_locationTxt );
+						table.put("org", orgTxt);
+						table.put("charge_description", charge_descriptionTxt);
+		
+						table.put("day1", day1Txt);
+						table.put("day2", day2Txt);
+						table.put("day3", day3Txt);
+						table.put("day4", day4Txt);
+						table.put("day5", day5Txt);
+						table.put("day6", day6Txt);
+						table.put("day7", day7Txt);
+						table.put("linetot",linetotTxt);
+					}else {
+						eachLineSuccess=false;
+						msgBody=msgBody+" "+"line total mismatched.";
+					}
+					
+					if(projectTxt.length()>0 && plcTxt.length()>0 && pay_typeTxt.length()>0 && 
+							labor_locationTxt.length()>0 && orgTxt.length()>0 && charge_descriptionTxt.length()>0)
+					ary.add(table);
+				}
+				  
+				  
+				String hdjson = gson.toJson(headFooter); 
+				String tbljson = gson.toJson(ary);
+				Map<String, Object> pageMap = new HashMap<String, Object>();
+				pageMap.put("header", hdjson);
+				pageMap.put("table", tbljson);
+				pageAry.add(pageMap);
+				 
+			
+	        }
+	     }
+	        pdDoc.close();
+			Map<String, Object> user = new HashMap<String, Object>();
+			user.put("username", "parsepdf");
+			user.put("password", "tg12345");
+			String user_details = gson.toJson(user);
+			String pages = gson.toJson(pageAry);
+			
+			jdata="{\"message\":{\"pages\":"+pages+",\"user_details\":"+user_details+"}}";
+			System.out.println(jdata);
+	  } catch (Exception e) {
+			eachLineSuccess=false;
+			msgBody=msgBody+" "+Constants.msgUnSuported;
+			sub=Constants.subUnSuported;
+			log.info("TableException"+e.toString());
+		}
+		return jdata;
+	}
+	public static Map<String, Object> ExractHeaderFooter(PDPage page){
+	EmpName=rev=periodEnd="";
+		Map<String, Object> headFooter = new HashMap<String, Object>();;
+        try {
+        	
+			Rectangle2D revision = new Rectangle2D.Double(648, 54.63, 15, 6);// 642.772
+	
+			Rectangle2D employee_name = new Rectangle2D.Double(68, 56.6, 150, 6);//
+			Rectangle2D employee_id = new Rectangle2D.Double(68, 66.6, 150, 6);
+			Rectangle2D period_ending = new Rectangle2D.Double(648, 74.6, 80, 6);
+			Rectangle2D printed_date = new Rectangle2D.Double(68, 86.6, 150, 6);
+			Rectangle2D signature = new Rectangle2D.Double(78, 506.63, 150, 6);
+			Rectangle2D signature_date = new Rectangle2D.Double(78, 517.63,150, 6);	
+			Rectangle2D approval = new Rectangle2D.Double(610, 505.63, 160, 6);//
+			Rectangle2D Approval_date = new Rectangle2D.Double(610, 516.63,160, 6);
+			
+			Rectangle2D tot_hrs_day1 = new Rectangle2D.Double(537, 484, 27, 6);//
+	        Rectangle2D tot_hrs_day2 = new Rectangle2D.Double(566, 484, 27, 6);//
+	        Rectangle2D tot_hrs_day3 = new Rectangle2D.Double(594, 484, 27, 6);
+	        Rectangle2D tot_hrs_day4 = new Rectangle2D.Double(622, 484, 27, 6);
+	        Rectangle2D tot_hrs_day5 = new Rectangle2D.Double(650, 484, 27, 6);
+	        Rectangle2D tot_hrs_day6 = new Rectangle2D.Double(679, 484, 27, 6);
+	        Rectangle2D tot_hrs_day7 = new Rectangle2D.Double(707, 484, 27, 6);//
+	        Rectangle2D tot_hours =  new Rectangle2D.Double(734, 484, 27, 6);
+	        
+			PDFTextStripperByAreaGAE stripper = new PDFTextStripperByAreaGAE();
+			stripper.setSortByPosition(true);
+	
+			stripper.addRegion("revision", revision);
+			stripper.addRegion("employee_name", employee_name);
+			stripper.addRegion("employee_id", employee_id);
+			stripper.addRegion("period_ending", period_ending);
+			stripper.addRegion("printed_date", printed_date);
+			stripper.addRegion("signature", signature);
+			stripper.addRegion("signature_date", signature_date);
+			stripper.addRegion("approval", approval);
+			stripper.addRegion("approval_date", Approval_date);
+			
+			stripper.addRegion("tot_hrs_day1", tot_hrs_day1);
+	        stripper.addRegion("tot_hrs_day2", tot_hrs_day2);
+	        stripper.addRegion("tot_hrs_day3", tot_hrs_day3);
+	        stripper.addRegion("tot_hrs_day4", tot_hrs_day4);
+	        stripper.addRegion("tot_hrs_day5", tot_hrs_day5);
+	        stripper.addRegion("tot_hrs_day6", tot_hrs_day6);
+	        stripper.addRegion("tot_hrs_day7", tot_hrs_day7);
+	        stripper.addRegion("tot_hours", tot_hours);
+	        	
+			stripper.extractRegions(page);
+
+			String employee_idTxt=stripper.getTextForRegion("employee_id").replace("\n", "");
+			String employee_nameTxt=stripper.getTextForRegion("employee_name").replace("\n", "");
+			String revisionTxt=stripper.getTextForRegion("revision").replace("\n", "");
+			String period_endingTxt=stripper.getTextForRegion("period_ending").replace("\n", "");
+			String printed_dateTxt=stripper.getTextForRegion("printed_date").replace("\n", "");
+			
+			EmpName=employee_nameTxt;rev=revisionTxt;periodEnd=period_endingTxt;
+			
+			if(employee_idTxt.length()>0 && employee_nameTxt.length()>0 && revisionTxt.length()>0 &&
+				period_endingTxt.length()>0 && printed_dateTxt.length()>0){
+				
+				headFooter.put("employee_id",employee_idTxt);
+				headFooter.put("employee_name",employee_nameTxt);
+				headFooter.put("revision", revisionTxt);
+				headFooter.put("period_ending", period_endingTxt);
+				headFooter.put("printed_date", stripper.getTextForRegion("printed_date").replace("\n", ""));
+			
+				headFooter.put("signature", stripper.getTextForRegion("signature").replace("\n", ""));
+				headFooter.put("signature_date", stripper.getTextForRegion("signature_date").replace("\n", ""));
+				headFooter.put("approval", stripper.getTextForRegion("approval").replace("\n", ""));
+				headFooter.put("approval_date",stripper.getTextForRegion("approval_date").replace("\n", ""));
+				
+//				System.out.println("approval:" + stripper.getTextForRegion("approval"));
+//				System.out.println("approval_date:" + stripper.getTextForRegion("approval_date"));
+				
+				
+				String day1Txt=stripper.getTextForRegion("tot_hrs_day1").replace("\n", "");
+				String day2Txt=stripper.getTextForRegion("tot_hrs_day2").replace("\n", "");
+				String day3Txt=stripper.getTextForRegion("tot_hrs_day3").replace("\n", "");
+				String day4Txt=stripper.getTextForRegion("tot_hrs_day4").replace("\n", "");
+				String day5Txt=stripper.getTextForRegion("tot_hrs_day5").replace("\n", "");
+				String day6Txt=stripper.getTextForRegion("tot_hrs_day6").replace("\n", "");
+				String day7Txt=stripper.getTextForRegion("tot_hrs_day7").replace("\n", "");
+				String linetotTxt=stripper.getTextForRegion("tot_hours").replace("\n", "");
+				
+				if(checkTotVal(day1Txt, day2Txt, day3Txt, day4Txt, day5Txt, day6Txt, day7Txt, linetotTxt)){
+		
+					headFooter.put("tot_hours", linetotTxt);
+					headFooter.put("tot_hrs_day1", day1Txt);
+					headFooter.put("tot_hrs_day2", day2Txt);
+					headFooter.put("tot_hrs_day3", day3Txt);
+					headFooter.put("tot_hrs_day4", day4Txt);
+					headFooter.put("tot_hrs_day5", day5Txt);
+					headFooter.put("tot_hrs_day6", day6Txt);
+					headFooter.put("tot_hrs_day7", day7Txt);
+				}else {
+					eachLineSuccess=false;
+					msgBody=msgBody+" "+"overall total mismatched.";
+				}
+			}else {
+			eachLineSuccess=false;
+			msgBody=msgBody+" "+Constants.msgNotParseable;
+			sub=Constants.subNotParseable;
+		 }
+			
+    	} catch (IOException e) {
+    		eachLineSuccess=false;
+			msgBody=msgBody+" "+Constants.msgUnSuported;
+			sub=Constants.subUnSuported;
+    		log.info("ExractHeaderFooter:"+e.toString());
+		}
+        
+        
+	return headFooter;
+	}
+	private static boolean checkTotVal(String day1,String day2,String day3,
+			String day4,String day5,String day6,String day7,String tot){
+		try{
+			double day1dbl=Double.parseDouble(checkNumNull(day1));
+			double day2dbl=Double.parseDouble(checkNumNull(day2));
+			double day3dbl=Double.parseDouble(checkNumNull(day3));
+			double day4dbl=Double.parseDouble(checkNumNull(day4));
+			double day5dbl=Double.parseDouble(checkNumNull(day5));
+			double day6dbl=Double.parseDouble(checkNumNull(day6));
+			double day7dbl=Double.parseDouble(checkNumNull(day7));
+			double linetotdbl=Double.parseDouble(checkNumNull(tot));
+			
+			double tmptot=(double)Math.round((day1dbl+day2dbl+day3dbl+day4dbl+day5dbl+day6dbl+day7dbl) * 1000) / 1000;
+			Boolean ret=tmptot==linetotdbl ? true:false;
+			return ret;
+			
+		}catch(NumberFormatException e){
+			eachLineSuccess=false;
+			msgBody=msgBody+" "+"Hour values not found.";
+		 return false;
+		}
+	}
+	public static String checkNumNull(String str) {
+        return str.trim().length() == 0 ? "0" : str;
+    }
+	public void sendMail(){
+
+        try {
+        	
+            Message msg = new MimeMessage(session);
+            msg.setFrom(new InternetAddress(Constants.email, "Employee Timesheet Parser"));
+            msg.addRecipient(Message.RecipientType.TO,new InternetAddress(mailAdr));
+            msg.addRecipient(Message.RecipientType.BCC,new InternetAddress("chidhambaram.s@technogemsinc.com ", "Mr. Admin"));
+            msg.addRecipient(Message.RecipientType.BCC,new InternetAddress("Jim.P@technogemsinc.com ", "Mr. Admin"));
+            msg.setSubject(sub);
+           // msg.setReplyTo(message.getFrom());
+            msg.setText(msgBody);
+            Transport.send(msg);
+            
+            
+//            Message replyMessage = new MimeMessage(session);
+//            replyMessage = (MimeMessage) message.reply(false);
+//            replyMessage.setFrom(new InternetAddress(to));
+//            replyMessage.setText("Thanks");
+//            replyMessage.setReplyTo(message.getReplyTo());
+
+        } catch (AddressException e) {
+        	log.info(e.toString());
+        } catch (MessagingException e) {
+        	log.info(e.toString());
+        }catch (UnsupportedEncodingException e) {
+        	log.info(e.toString());
+        }
+	}
+	public static String curDateWithFormat(){
+		
+		DateFormat df = new SimpleDateFormat("dd/MM/yy HH:mm:ss");
+		Calendar calobj = Calendar.getInstance();
+		return df.format(calobj.getTime());
+	}
+	
+	public static String endDateWithFormat(String date){		
+		
+		SimpleDateFormat originalFormat = new SimpleDateFormat("MMM dd, yyyy", Locale.ENGLISH);
+        SimpleDateFormat targetFormat = new SimpleDateFormat("YYYY_MM_dd");
+        String formattedDate = null;
+  
+        try {
+            Date fdate = originalFormat.parse(date);
+            formattedDate = targetFormat.format(fdate);
+        }catch (ParseException e) {
+            System.out.println(e.toString());
+        }
+        return formattedDate;
+	}
+    public static String ConvertDateFormat(String date) {
+
+		DateFormat originalFormat = new SimpleDateFormat("MMM dd, yyyy",Locale.ENGLISH);
+		DateFormat targetFormat = new SimpleDateFormat("yyyy-MM-dd");
+		
+		String formattedDate = null;
+
+		try {
+			Date fdate = originalFormat.parse(date);
+			formattedDate = targetFormat.format(fdate);
+
+		} catch (ParseException e) {
+			// TODO Auto-generated catch block
+			e.printStackTrace();
+		}
+		return formattedDate;
+	}
+
+
+
+   
+}
