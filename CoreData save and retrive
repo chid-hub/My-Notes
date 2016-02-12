@@ -1,0 +1,30 @@
+- (IBAction)saveBtn:(id)sender {
+    AppDelegate *appdelegate=[[UIApplication sharedApplication] delegate];
+    NSManagedObjectContext *context=[appdelegate managedObjectContext];
+    NSManagedObject *newMO;
+    newMO=[NSEntityDescription insertNewObjectForEntityForName:@"Contact" inManagedObjectContext:context];
+    [newMO setValue:self.nameTxtFld.text forKey:@"name"];
+    [newMO setValue:self.addrTxtFld.text forKey:@"mobileNo"];
+    [newMO setValue:self.mobilNoTxtFld.text forKey:@"address"];
+    
+    NSError *error;
+    [context save:&error];
+
+}
+
+- (IBAction)showSavedData:(id)sender {
+    AppDelegate *appdelegate=[[UIApplication sharedApplication] delegate];
+    NSManagedObjectContext *context=[appdelegate managedObjectContext];
+    NSFetchRequest *entityRequest = [[NSFetchRequest alloc] init];
+    NSEntityDescription *entityDescription = [NSEntityDescription entityForName:@"Contact" inManagedObjectContext:context];
+    [entityRequest setEntity:entityDescription];
+    NSArray *contacts = [context executeFetchRequest:entityRequest error:nil];
+    
+    for (int i=0; i<[contacts count]; i++) {
+        NSManagedObject *newMO=[contacts objectAtIndex:i];
+        NSLog(@"name :%@",[newMO valueForKey:@"name"]);
+        NSLog(@"mobileNo :%@",[newMO valueForKey:@"mobileNo"]); 
+        NSLog(@"address :%@",[newMO valueForKey:@"address"]); 
+    }
+  
+}
